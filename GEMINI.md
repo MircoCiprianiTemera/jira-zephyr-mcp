@@ -16,6 +16,7 @@ This project is a TypeScript application for interacting with Jira and Zephyr.
         -   `zephyr-types.ts`: Types for Zephyr data structures.
     -   **`utils/`**: Contains utility functions.
         -   `config.ts`: Configuration management.
+        -   `text.ts`: Converts the HTML of Zephyr rich-text fields to plain text.
         -   `validation.ts`: Validation logic.
 -   **`package.json`**: Defines project metadata, dependencies, and scripts.
 -   **`tsconfig.json`**: TypeScript compiler configuration.

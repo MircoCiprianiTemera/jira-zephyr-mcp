@@ -1,7 +1,9 @@
 # Zephyr MCP Implementation Plan
 
 ## Overview
-This document outlines the implementation plan for a Model Context Protocol (MCP) server that integrates with JIRA's Zephyr test management system. The MCP server will provide tools for managing test plans, test cycles, and accessing JIRA issue information.
+This document outlines the implementation plan for a Model Context Protocol (MCP) server that integrates with JIRA's Zephyr test management system. The MCP server provides tools for managing test plans, test cycles, test cases (with their steps and attachments), test executions, and for accessing JIRA issue information.
+
+All Zephyr calls use the Zephyr Scale Cloud REST API v2 (`https://api.zephyrscale.smartbear.com/v2`). The phases below describe how the project was originally built; the tool list reflects the current state (version 1.2.0).
 
 ## Architecture
 
@@ -24,14 +26,17 @@ jira-zephyr-mcp/
 │   │   ├── test-plans.ts        # Test plan management tools
 │   │   ├── test-cycles.ts       # Test cycle management tools
 │   │   ├── jira-issues.ts       # JIRA issue reading tools
+│   │   ├── test-cases.ts        # Test case, test step and attachment tools
 │   │   └── test-execution.ts    # Test execution tools
 │   ├── types/
 │   │   ├── jira-types.ts        # JIRA API response types
 │   │   └── zephyr-types.ts      # Zephyr API response types
 │   └── utils/
 │       ├── config.ts            # Configuration utilities
+│       ├── text.ts              # HTML to plain text for Zephyr rich-text fields
 │       └── validation.ts        # Input validation utilities
 ├── package.json
+├── Dockerfile
 ├── tsconfig.json
 ├── README.md
 └── .env.example
@@ -39,7 +44,7 @@ jira-zephyr-mcp/
 
 ## MCP Tools Implementation
 
-### Primary Tools (Required)
+### Primary Tools
 
 #### 1. create_test_plan
 - **Purpose**: Create new test plans in Zephyr
@@ -47,9 +52,8 @@ jira-zephyr-mcp/
   - name: string (required)
   - description: string (optional)
   - projectKey: string (required)
-  - startDate: string (optional)
-  - endDate: string (optional)
-- **Output**: Created test plan details
+- **Output**: Created test plan id and key
+- **Note**: `description` is sent as the plan `objective`; the API has no planned dates for test plans
 
 #### 2. create_test_cycle
 - **Purpose**: Create test execution cycles
@@ -57,11 +61,10 @@ jira-zephyr-mcp/
   - name: string (required)
   - description: string (optional)
   - projectKey: string (required)
-  - versionId: string (required)
-  - environment: string (optional)
+  - versionId: number (optional) - numeric JIRA project version ID
   - startDate: string (optional)
   - endDate: string (optional)
-- **Output**: Created test cycle details
+- **Output**: Created test cycle id and key
 
 #### 3. read_jira_issue
 - **Purpose**: Retrieve JIRA issue information
@@ -70,52 +73,129 @@ jira-zephyr-mcp/
   - fields: string[] (optional) - specific fields to retrieve
 - **Output**: JIRA issue details including custom fields
 
-### Additional Useful Tools
+### Test Plan, Cycle and Execution Tools
 
 #### 4. list_test_plans
 - **Purpose**: Browse existing test plans
 - **Inputs**:
   - projectKey: string (required)
-  - limit: number (optional, default: 50)
+  - limit: number (optional, default: 50, max: 1000)
   - offset: number (optional, default: 0)
-- **Output**: List of test plans with basic details
+- **Output**: List of test plans with status and folder names and linked test cycle IDs
 
 #### 5. list_test_cycles
-- **Purpose**: View test cycles and their status
+- **Purpose**: Browse test cycles
 - **Inputs**:
   - projectKey: string (required)
-  - versionId: string (optional)
-  - limit: number (optional, default: 50)
-- **Output**: List of test cycles with execution status
+  - versionId: number (optional) - numeric JIRA project version ID
+  - limit: number (optional, default: 50, max: 1000)
+  - offset: number (optional, default: 0)
+- **Output**: List of test cycles with status and folder names (execution progress comes from get_test_execution_status)
 
 #### 6. execute_test
 - **Purpose**: Update test execution results
 - **Inputs**:
-  - executionId: string (required)
-  - status: string (required) - PASS, FAIL, WIP, BLOCKED
+  - executionId: string (required) - execution ID or key
+  - status: string (required) - PASS, FAIL, WIP, BLOCKED, NOT_EXECUTED
+  - statusName: string (optional) - exact Zephyr status name, for custom statuses
   - comment: string (optional)
-  - defects: string[] (optional) - linked defect keys
-- **Output**: Updated execution details
+  - defects: string[] (optional) - JIRA issue keys to link to the execution
+- **Output**: Updated execution details and the result of each defect link
 
 #### 7. get_test_execution_status
 - **Purpose**: Check test execution progress
 - **Inputs**:
-  - cycleId: string (required)
-- **Output**: Execution statistics and progress
+  - cycleId: string (required) - cycle key (e.g. ABC-R3) or numeric ID
+- **Output**: Execution statistics over all the executions of the cycle, including a count per status name
 
 #### 8. link_tests_to_issues
 - **Purpose**: Associate test cases with JIRA issues
 - **Inputs**:
-  - testCaseId: string (required)
+  - testCaseId: string (required) - test case key
   - issueKeys: string[] (required)
-- **Output**: Link confirmation
+- **Output**: Link result for each issue
 
 #### 9. generate_test_report
 - **Purpose**: Create test execution reports
 - **Inputs**:
-  - cycleId: string (required)
+  - cycleId: string (required) - cycle key or numeric ID
   - format: string (optional) - JSON, HTML
 - **Output**: Test execution report data
+
+### Test Case Tools
+
+#### 10. create_test_case
+- **Purpose**: Create a test case, with its test script
+- **Inputs**:
+  - projectKey: string (required)
+  - name: string (required)
+  - objective, precondition: string (optional)
+  - estimatedTime: number (optional)
+  - priority, status: string (optional) - priority and status names, e.g. Normal, Draft
+  - folderId, componentId: number (optional)
+  - ownerId: string (optional) - JIRA account ID
+  - labels: string[] (optional)
+  - customFields: object (optional)
+  - testScript: object (optional) - STEP_BY_STEP with steps, or PLAIN_TEXT with text
+- **Output**: Created test case id and key, and the number of steps saved
+- **Note**: the test script is saved with separate calls after the test case is created
+
+#### 11. create_multiple_test_cases
+- **Purpose**: Create several test cases in one call
+- **Inputs**:
+  - testCases: array (required) - same fields as create_test_case
+  - continueOnError: boolean (optional, default: true)
+- **Output**: Result for each test case and a summary
+
+#### 12. search_test_cases
+- **Purpose**: List test cases in a project
+- **Inputs**:
+  - projectKey: string (required)
+  - query: string (optional) - case-insensitive match on key and name, applied by the server since the API has no text search
+  - folderId: number (optional)
+  - limit: number (optional, default: 50, max: 1000)
+- **Output**: Matching test cases with priority, status and folder names
+
+#### 13. get_test_case
+- **Purpose**: Read a test case
+- **Inputs**:
+  - testCaseId: string (required) - ID or key
+- **Output**: Test case details with project key and priority, status and folder names
+
+#### 14. get_test_steps
+- **Purpose**: Read all the steps of a test case
+- **Inputs**:
+  - testCaseId: string (required) - ID or key
+- **Output**: Every step as plain text; steps that call another test case return its key and non-empty parameters
+
+#### 15. list_test_case_attachments
+- **Purpose**: List attachments
+- **Inputs**:
+  - testCaseId: string (required)
+  - includeSteps: boolean (optional, default: false) - also list the attachments of each step
+- **Output**: Attachment IDs and file names
+
+#### 16. get_test_case_attachment
+- **Purpose**: Download an attachment
+- **Inputs**:
+  - testCaseId: string (required)
+  - attachmentId: number (required)
+  - stepId: number (optional) - for step attachments
+- **Output**: Text files as text (JSON minified), images as images, other files base64 encoded
+
+### Server Tools
+
+#### 17. get_server_info
+- **Purpose**: Check which build of the server is running
+- **Inputs**: none
+- **Output**: Server name, version, build time, start time and Node.js version
+
+## Zephyr Scale Cloud API v2 Notes
+- List endpoints are paginated with `startAt`/`maxResults` (default page size 10, at most 1000); the client follows every page.
+- Executions of a cycle are read with `GET /testexecutions?testCycle=<cycle key>`; the filter does not accept numeric IDs.
+- Priority, status, folder and project come back as IDs and are resolved to names with `/priorities`, `/statuses`, `/folders` and `/projects`, with a cache.
+- Issue links (`/links/issues`) take the numeric JIRA issue ID, which is looked up from the issue key.
+- Rich-text fields contain editor HTML, converted to plain text before being returned.
 
 ## Technical Implementation Details
 
@@ -159,17 +239,25 @@ ZEPHYR_API_TOKEN=your-zephyr-api-token
 ```json
 {
   "name": "jira-zephyr-mcp",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "tools": [
-    "create_test_plan",
-    "create_test_cycle", 
+    "get_server_info",
     "read_jira_issue",
+    "create_test_plan",
     "list_test_plans",
+    "create_test_cycle",
     "list_test_cycles",
     "execute_test",
     "get_test_execution_status",
     "link_tests_to_issues",
-    "generate_test_report"
+    "generate_test_report",
+    "create_test_case",
+    "create_multiple_test_cases",
+    "search_test_cases",
+    "get_test_case",
+    "get_test_steps",
+    "list_test_case_attachments",
+    "get_test_case_attachment"
   ]
 }
 ```

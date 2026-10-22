@@ -7,6 +7,8 @@ A Model Context Protocol (MCP) server that provides comprehensive integration wi
 ### Core Capabilities
 - **Test Plan Management**: Create and list test plans in Zephyr
 - **Test Cycle Management**: Create and manage test execution cycles
+- **Test Case Management**: Create, search and read test cases, including all their steps
+- **Attachments**: List and download test case and test step attachments
 - **JIRA Integration**: Read JIRA issue details and metadata
 - **Test Execution**: Update test execution results and status
 - **Progress Tracking**: Monitor test execution progress and statistics
@@ -19,16 +21,22 @@ A Model Context Protocol (MCP) server that provides comprehensive integration wi
 2. **create_test_plan** - Create new test plans in Zephyr
 3. **list_test_plans** - Browse existing test plans
 4. **create_test_cycle** - Create test execution cycles
-5. **list_test_cycles** - View test cycles with execution status
+5. **list_test_cycles** - Browse test cycles
 6. **execute_test** - Update test execution results
-7. **get_test_execution_status** - Check test execution progress
+7. **get_test_execution_status** - Check test execution progress of a cycle (all executions, grouped by status)
 8. **link_tests_to_issues** - Associate tests with JIRA issues
 9. **generate_test_report** - Create test execution reports
 10. **create_test_case** - Create a new test case in Zephyr
 11. **create_multiple_test_cases** - Create multiple test cases at once
-12. **search_test_cases** - Search for test cases in a project
+12. **search_test_cases** - List test cases in a project, optionally filtered by text on key and name
 13. **get_test_case** - Get detailed information about a specific test case
-14. **get_test_steps** - Get all test steps for a specific test case
+14. **get_test_steps** - Get all test steps for a specific test case, as plain text
+15. **get_server_info** - Get the server version, build time and start time (useful to check which build is running)
+16. **list_test_case_attachments** - List the attachments of a test case and, optionally, of its steps
+17. **get_test_case_attachment** - Download a test case or test step attachment
+
+All list tools follow the Zephyr API pagination, so they return every result up to the requested `limit`.
+Long text fields are returned as plain text: the HTML formatting added by the Zephyr editor is removed.
 
 ## Prerequisites
 
@@ -218,9 +226,7 @@ await readJiraIssue({
 await createTestPlan({
   name: "Release 2.0 Test Plan",
   description: "Comprehensive testing for release 2.0",
-  projectKey: "ABC",
-  startDate: "2024-01-15",
-  endDate: "2024-01-30"
+  projectKey: "ABC"
 });
 ```
 
@@ -231,8 +237,7 @@ await createTestCycle({
   name: "Sprint 10 Testing",
   description: "Testing for sprint 10 features",
   projectKey: "ABC",
-  versionId: "10001",
-  environment: "Production"
+  versionId: 10001 // numeric Jira project version ID, optional
 });
 
 // List test cycles
@@ -246,26 +251,27 @@ await listTestCycles({
 ```typescript
 // Update test execution status
 await executeTest({
-  executionId: "12345",
-  status: "PASS",
-  comment: "All tests passed successfully"
+  executionId: "ABC-E12",
+  status: "FAIL",
+  comment: "Login button not responding",
+  defects: ["ABC-456"]
 });
 
-// Get execution status
-await getTestExecutionStatus({ cycleId: "67890" });
+// Get execution status (cycle key or numeric ID)
+await getTestExecutionStatus({ cycleId: "ABC-R3" });
 ```
 
 ### Generating Reports
 ```typescript
 // Generate JSON report
 await generateTestReport({
-  cycleId: "67890",
+  cycleId: "ABC-R3",
   format: "JSON"
 });
 
 // Generate HTML report
 await generateTestReport({
-  cycleId: "67890",
+  cycleId: "ABC-R3",
   format: "HTML"
 });
 ```
@@ -291,6 +297,10 @@ await searchTestCases({ projectKey: "ABC", query: "login" });
 
 // Get test steps for a specific test case
 await getTestSteps({ testCaseId: "ABC-T42" });
+
+// List and download attachments
+await listTestCaseAttachments({ testCaseId: "ABC-T42", includeSteps: true });
+await getTestCaseAttachment({ testCaseId: "ABC-T42", attachmentId: 131649446 });
 ```
 
 ## Error Handling
