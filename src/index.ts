@@ -1,5 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -16,7 +18,15 @@ import {
   linkTestsToIssues,
   generateTestReport,
 } from './tools/test-execution.js';
-import { createTestCase, searchTestCases, getTestCase, createMultipleTestCases } from './tools/test-cases.js';
+import {
+  createTestCase,
+  searchTestCases,
+  getTestCase,
+  getTestSteps,
+  listTestCaseAttachments,
+  getTestCaseAttachment,
+  createMultipleTestCases,
+} from './tools/test-cases.js';
 import {
   readJiraIssueSchema,
   createTestPlanSchema,
@@ -31,6 +41,8 @@ import {
   searchTestCasesSchema,
   getTestCaseSchema,
   getTestStepsSchema,
+  listTestCaseAttachmentsSchema,
+  getTestCaseAttachmentSchema,
   createMultipleTestCasesSchema,
   ReadJiraIssueInput,
   CreateTestPlanInput,
@@ -45,13 +57,29 @@ import {
   SearchTestCasesInput,
   GetTestCaseInput,
   GetTestStepsInput,
+  ListTestCaseAttachmentsInput,
+  GetTestCaseAttachmentInput,
   CreateMultipleTestCasesInput,
 } from './utils/validation.js';
+import packageJson from '../package.json';
+
+const SERVER_NAME = 'jira-zephyr-mcp';
+const SERVER_VERSION: string = packageJson.version;
+const STARTED_AT = new Date().toISOString();
+
+// The bundle's mtime tells which build the running process loaded
+const getBuildTime = (): string | null => {
+  try {
+    return statSync(fileURLToPath(import.meta.url)).mtime.toISOString();
+  } catch {
+    return null;
+  }
+};
 
 const server = new Server(
   {
-    name: 'jira-zephyr-mcp',
-    version: '1.0.0',
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
   },
   {
     capabilities: {
@@ -63,6 +91,14 @@ const server = new Server(
 );
 
 const TOOLS = [
+  {
+    name: 'get_server_info',
+    description: 'Get the version, build time and start time of this MCP server',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
   {
     name: 'read_jira_issue',
     description: 'Read JIRA issue details and metadata',
@@ -82,10 +118,8 @@ const TOOLS = [
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Test plan name' },
-        description: { type: 'string', description: 'Test plan description (optional)' },
+        description: { type: 'string', description: 'Test plan objective (optional)' },
         projectKey: { type: 'string', description: 'JIRA project key' },
-        startDate: { type: 'string', description: 'Planned start date (ISO format, optional)' },
-        endDate: { type: 'string', description: 'Planned end date (ISO format, optional)' },
       },
       required: ['name', 'projectKey'],
     },
@@ -97,7 +131,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         projectKey: { type: 'string', description: 'JIRA project key' },
-        limit: { type: 'number', description: 'Maximum number of results (default: 50)' },
+        limit: { type: 'number', description: 'Maximum number of results, up to 1000 (default: 50)' },
         offset: { type: 'number', description: 'Number of results to skip (default: 0)' },
       },
       required: ['projectKey'],
@@ -112,23 +146,23 @@ const TOOLS = [
         name: { type: 'string', description: 'Test cycle name' },
         description: { type: 'string', description: 'Test cycle description (optional)' },
         projectKey: { type: 'string', description: 'JIRA project key' },
-        versionId: { type: 'string', description: 'JIRA version ID' },
-        environment: { type: 'string', description: 'Test environment (optional)' },
+        versionId: { type: 'number', description: 'Numeric JIRA project version ID (optional)' },
         startDate: { type: 'string', description: 'Planned start date (ISO format, optional)' },
         endDate: { type: 'string', description: 'Planned end date (ISO format, optional)' },
       },
-      required: ['name', 'projectKey', 'versionId'],
+      required: ['name', 'projectKey'],
     },
   },
   {
     name: 'list_test_cycles',
-    description: 'List existing test cycles with execution status',
+    description: 'List existing test cycles (use get_test_execution_status for execution progress)',
     inputSchema: {
       type: 'object',
       properties: {
         projectKey: { type: 'string', description: 'JIRA project key' },
-        versionId: { type: 'string', description: 'JIRA version ID (optional)' },
-        limit: { type: 'number', description: 'Maximum number of results (default: 50)' },
+        versionId: { type: 'number', description: 'Numeric JIRA project version ID (optional)' },
+        limit: { type: 'number', description: 'Maximum number of results, up to 1000 (default: 50)' },
+        offset: { type: 'number', description: 'Number of results to skip (default: 0)' },
       },
       required: ['projectKey'],
     },
@@ -139,10 +173,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        executionId: { type: 'string', description: 'Test execution ID' },
-        status: { type: 'string', enum: ['PASS', 'FAIL', 'WIP', 'BLOCKED'], description: 'Execution status' },
+        executionId: { type: 'string', description: 'Test execution ID or key (e.g., GUCCI-E1)' },
+        status: { type: 'string', enum: ['PASS', 'FAIL', 'WIP', 'BLOCKED', 'NOT_EXECUTED'], description: 'Execution status, mapped to the default Zephyr statuses Pass, Fail, In Progress, Blocked, Not Executed' },
+        statusName: { type: 'string', description: 'Exact Zephyr status name, overrides status for custom statuses (optional)' },
         comment: { type: 'string', description: 'Execution comment (optional)' },
-        defects: { type: 'array', items: { type: 'string' }, description: 'Linked defect keys (optional)' },
+        defects: { type: 'array', items: { type: 'string' }, description: 'JIRA issue keys to link to the execution (optional)' },
       },
       required: ['executionId', 'status'],
     },
@@ -153,7 +188,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        cycleId: { type: 'string', description: 'Test cycle ID' },
+        cycleId: { type: 'string', description: 'Test cycle key (e.g., GUCCI-R1) or numeric ID' },
       },
       required: ['cycleId'],
     },
@@ -164,7 +199,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        testCaseId: { type: 'string', description: 'Test case ID' },
+        testCaseId: { type: 'string', description: 'Test case key (e.g., GUCCI-T1)' },
         issueKeys: { type: 'array', items: { type: 'string' }, description: 'JIRA issue keys to link' },
       },
       required: ['testCaseId', 'issueKeys'],
@@ -176,7 +211,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        cycleId: { type: 'string', description: 'Test cycle ID' },
+        cycleId: { type: 'string', description: 'Test cycle key (e.g., GUCCI-R1) or numeric ID' },
         format: { type: 'string', enum: ['JSON', 'HTML'], description: 'Report format (default: JSON)' },
       },
       required: ['cycleId'],
@@ -193,11 +228,12 @@ const TOOLS = [
         objective: { type: 'string', description: 'Test case objective/description (optional)' },
         precondition: { type: 'string', description: 'Test preconditions (optional)' },
         estimatedTime: { type: 'number', description: 'Estimated execution time in minutes (optional)' },
-        priority: { type: 'string', description: 'Test case priority (optional)' },
-        status: { type: 'string', description: 'Test case status (optional)' },
-        folderId: { type: 'string', description: 'Folder ID to organize test case (optional)' },
+        priority: { type: 'string', description: 'Priority name, e.g. Normal (optional)' },
+        status: { type: 'string', description: 'Status name, e.g. Draft (optional)' },
+        folderId: { type: 'number', description: 'Numeric folder ID to organize test case (optional)' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Test case labels (optional)' },
-        componentId: { type: 'string', description: 'Component ID (optional)' },
+        componentId: { type: 'number', description: 'Numeric JIRA component ID (optional)' },
+        ownerId: { type: 'string', description: 'Owner JIRA account ID (optional)' },
         customFields: { type: 'object', description: 'Custom fields as key-value pairs (optional)' },
         testScript: {
           type: 'object',
@@ -233,8 +269,9 @@ const TOOLS = [
       type: 'object',
       properties: {
         projectKey: { type: 'string', description: 'JIRA project key' },
-        query: { type: 'string', description: 'Search query (optional)' },
-        limit: { type: 'number', description: 'Maximum number of results (default: 50)' },
+        query: { type: 'string', description: 'Case-insensitive text matched against test case key and name (optional)' },
+        folderId: { type: 'number', description: 'Numeric folder ID to restrict the search (optional)' },
+        limit: { type: 'number', description: 'Maximum number of results, up to 1000 (default: 50)' },
       },
       required: ['projectKey'],
     },
@@ -252,13 +289,38 @@ const TOOLS = [
   },
   {
     name: 'get_test_steps',
-    description: 'Get all test steps for a specific test case',
+    description: 'Get all test steps for a specific test case, as plain text (HTML formatting and empty parameters removed)',
     inputSchema: {
       type: 'object',
       properties: {
         testCaseId: { type: 'string', description: 'Test case ID or key (e.g., MSTW-T67)' },
       },
       required: ['testCaseId'],
+    },
+  },
+  {
+    name: 'list_test_case_attachments',
+    description: 'List the attachments of a test case, optionally including the attachments of each test step',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        testCaseId: { type: 'string', description: 'Test case ID or key (e.g., MSTW-T67)' },
+        includeSteps: { type: 'boolean', description: 'Also list step attachments, one request per step (default: false)' },
+      },
+      required: ['testCaseId'],
+    },
+  },
+  {
+    name: 'get_test_case_attachment',
+    description: 'Download a test case or test step attachment. Text files are returned as text (JSON minified), images as images, other files base64 encoded',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        testCaseId: { type: 'string', description: 'Test case ID or key (e.g., MSTW-T67)' },
+        attachmentId: { type: 'number', description: 'Attachment ID from list_test_case_attachments' },
+        stepId: { type: 'number', description: 'Test step ID, for step attachments (optional)' },
+      },
+      required: ['testCaseId', 'attachmentId'],
     },
   },
   {
@@ -277,11 +339,12 @@ const TOOLS = [
               objective: { type: 'string', description: 'Test case objective/description (optional)' },
               precondition: { type: 'string', description: 'Test preconditions (optional)' },
               estimatedTime: { type: 'number', description: 'Estimated execution time in minutes (optional)' },
-              priority: { type: 'string', description: 'Test case priority (optional)' },
-              status: { type: 'string', description: 'Test case status (optional)' },
-              folderId: { type: 'string', description: 'Folder ID to organize test case (optional)' },
+              priority: { type: 'string', description: 'Priority name, e.g. Normal (optional)' },
+              status: { type: 'string', description: 'Status name, e.g. Draft (optional)' },
+              folderId: { type: 'number', description: 'Numeric folder ID to organize test case (optional)' },
               labels: { type: 'array', items: { type: 'string' }, description: 'Test case labels (optional)' },
-              componentId: { type: 'string', description: 'Component ID (optional)' },
+              componentId: { type: 'number', description: 'Numeric JIRA component ID (optional)' },
+              ownerId: { type: 'string', description: 'Owner JIRA account ID (optional)' },
               customFields: { type: 'object', description: 'Custom fields as key-value pairs (optional)' },
               testScript: {
                 type: 'object',
@@ -339,13 +402,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case 'get_server_info': {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  name: SERVER_NAME,
+                  version: SERVER_VERSION,
+                  buildTime: getBuildTime(),
+                  startedAt: STARTED_AT,
+                  nodeVersion: process.version,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
       case 'read_jira_issue': {
         const validatedArgs = validateInput<ReadJiraIssueInput>(readJiraIssueSchema, args, 'read_jira_issue');
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await readJiraIssue(validatedArgs), null, 2),
+              text: JSON.stringify(await readJiraIssue(validatedArgs)),
             },
           ],
         };
@@ -357,7 +441,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await createTestPlan(validatedArgs), null, 2),
+              text: JSON.stringify(await createTestPlan(validatedArgs)),
             },
           ],
         };
@@ -369,7 +453,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await listTestPlans(validatedArgs), null, 2),
+              text: JSON.stringify(await listTestPlans(validatedArgs)),
             },
           ],
         };
@@ -381,7 +465,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await createTestCycle(validatedArgs), null, 2),
+              text: JSON.stringify(await createTestCycle(validatedArgs)),
             },
           ],
         };
@@ -393,7 +477,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await listTestCycles(validatedArgs), null, 2),
+              text: JSON.stringify(await listTestCycles(validatedArgs)),
             },
           ],
         };
@@ -405,7 +489,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await executeTest(validatedArgs), null, 2),
+              text: JSON.stringify(await executeTest(validatedArgs)),
             },
           ],
         };
@@ -417,7 +501,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await getTestExecutionStatus(validatedArgs), null, 2),
+              text: JSON.stringify(await getTestExecutionStatus(validatedArgs)),
             },
           ],
         };
@@ -429,7 +513,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await linkTestsToIssues(validatedArgs), null, 2),
+              text: JSON.stringify(await linkTestsToIssues(validatedArgs)),
             },
           ],
         };
@@ -441,7 +525,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await generateTestReport(validatedArgs), null, 2),
+              text: JSON.stringify(await generateTestReport(validatedArgs)),
             },
           ],
         };
@@ -453,7 +537,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await createTestCase(validatedArgs), null, 2),
+              text: JSON.stringify(await createTestCase(validatedArgs)),
             },
           ],
         };
@@ -465,7 +549,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await searchTestCases(validatedArgs), null, 2),
+              text: JSON.stringify(await searchTestCases(validatedArgs)),
             },
           ],
         };
@@ -477,7 +561,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await getTestCase(validatedArgs), null, 2),
+              text: JSON.stringify(await getTestCase(validatedArgs)),
             },
           ],
         };
@@ -485,14 +569,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_test_steps': {
         const validatedArgs = validateInput<GetTestStepsInput>(getTestStepsSchema, args, 'get_test_steps');
-        const zephyrClient = new (await import('./clients/zephyr-client.js')).ZephyrClient();
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await zephyrClient.getTestSteps(validatedArgs.testCaseId), null, 2),
+              text: JSON.stringify(await getTestSteps(validatedArgs)),
             },
           ],
+        };
+      }
+
+      case 'list_test_case_attachments': {
+        const validatedArgs = validateInput<ListTestCaseAttachmentsInput>(listTestCaseAttachmentsSchema, args, 'list_test_case_attachments');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(await listTestCaseAttachments(validatedArgs)),
+            },
+          ],
+        };
+      }
+
+      case 'get_test_case_attachment': {
+        const validatedArgs = validateInput<GetTestCaseAttachmentInput>(getTestCaseAttachmentSchema, args, 'get_test_case_attachment');
+        return {
+          content: await getTestCaseAttachment(validatedArgs),
         };
       }
 
@@ -502,7 +604,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(await createMultipleTestCases(validatedArgs), null, 2),
+              text: JSON.stringify(await createMultipleTestCases(validatedArgs)),
             },
           ],
         };
@@ -519,7 +621,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function main() {
   try {
-    console.error('Starting Jira Zephyr MCP server...');
+    console.error(`Starting Jira Zephyr MCP server v${SERVER_VERSION}...`);
     
     const transport = new StdioServerTransport();
     await server.connect(transport);
