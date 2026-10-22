@@ -28,7 +28,7 @@ A Model Context Protocol (MCP) server that provides comprehensive integration wi
 9. **generate_test_report** - Create test execution reports
 10. **create_test_case** - Create a new test case in Zephyr
 11. **create_multiple_test_cases** - Create multiple test cases at once
-12. **search_test_cases** - List test cases in a project, optionally filtered by text on key and name
+12. **search_test_cases** - List test cases in a project (key, name, status, folder), optionally filtered by text on key and name
 13. **get_test_case** - Get detailed information about a specific test case
 14. **get_test_steps** - Get all test steps for a specific test case, as plain text
 15. **get_server_info** - Get the server version, build time and start time (useful to check which build is running)

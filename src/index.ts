@@ -264,7 +264,7 @@ const TOOLS = [
   },
   {
     name: 'search_test_cases',
-    description: 'Search for test cases in a project',
+    description: 'Search for test cases in a project. Returns key, name, status and folder; use get_test_case for the details',
     inputSchema: {
       type: 'object',
       properties: {

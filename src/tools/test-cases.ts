@@ -66,6 +66,21 @@ const describeTestCase = async (client: ZephyrClient, testCase: ZephyrTestCase) 
   });
 };
 
+// Lists stay small: the full test case is read with get_test_case
+const summarizeTestCase = async (client: ZephyrClient, testCase: ZephyrTestCase) => {
+  const [status, folder] = await Promise.all([
+    client.resolveName('statuses', testCase.status),
+    client.resolveName('folders', testCase.folder),
+  ]);
+
+  return compact({
+    key: testCase.key,
+    name: testCase.name,
+    status,
+    folder: testCase.folder ? { id: testCase.folder.id, name: folder } : null,
+  });
+};
+
 const describeTestStep = (step: ZephyrTestStep, index: number) => {
   if (step.testCase) {
     const parameters = Object.fromEntries(
@@ -131,7 +146,7 @@ export const searchTestCases = async (input: SearchTestCasesInput) => {
         total: result.total,
         returned: result.testCases.length,
         projectKey: validatedInput.projectKey,
-        testCases: await Promise.all(result.testCases.map(testCase => describeTestCase(client, testCase))),
+        testCases: await Promise.all(result.testCases.map(testCase => summarizeTestCase(client, testCase))),
       },
     };
   } catch (error: any) {

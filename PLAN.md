@@ -154,7 +154,7 @@ jira-zephyr-mcp/
   - query: string (optional) - case-insensitive match on key and name, applied by the server since the API has no text search
   - folderId: number (optional)
   - limit: number (optional, default: 50, max: 1000)
-- **Output**: Matching test cases with priority, status and folder names
+- **Output**: Key, name, status and folder of each matching test case; details come from get_test_case
 
 #### 13. get_test_case
 - **Purpose**: Read a test case

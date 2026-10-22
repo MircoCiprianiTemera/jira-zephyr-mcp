@@ -19,7 +19,9 @@ Aligns the server with the Zephyr Scale Cloud REST API v2, checked against the o
 - All list tools follow the API pagination and return every result up to `limit`, which now goes up to 1000.
 - `get_test_steps` returns compact plain-text steps: editor HTML, `self` URLs and empty parameters are removed, and a step that calls another test case returns its key and parameters. The GUCCI-T104 output went from 66 KB to 15 KB.
 - Tool results are serialized as compact JSON.
-- `get_test_case` and `search_test_cases` return the project key and the priority, status and folder names instead of numeric IDs, and plain-text objective and precondition.
+- `get_test_case` returns the project key and the priority, status and folder names instead of numeric IDs, and plain-text objective and precondition.
+- `search_test_cases` returns only key, name, status and folder of each test case (the details come from `get_test_case`): 161 test cases went from 77 KB to 25 KB.
+- `read_jira_issue` with `fields` returns only the requested fields, instead of showing the others as null.
 - `get_test_execution_status` and `generate_test_report` accept a cycle key or a numeric ID.
 - `create_test_cycle`: `versionId` is now an optional number.
 - `folderId` and `componentId` are numbers.
