@@ -19,7 +19,7 @@ The following environment variables are required:
 - `create_test_plan`: Create a new test plan in Zephyr
 - `list_test_plans`: List existing test plans
 - `create_test_cycle`: Create a new test execution cycle
-- `list_test_cycles`: List existing test cycles with execution status
+- `list_test_cycles`: List existing test cycles
 - `execute_test`: Update test execution results
 - `get_test_execution_status`: Get test execution progress and statistics
 - `link_tests_to_issues`: Associate test cases with JIRA issues
@@ -28,6 +28,10 @@ The following environment variables are required:
 - `create_multiple_test_cases`: Create multiple test cases in Zephyr at once
 - `search_test_cases`: Search for test cases in a project
 - `get_test_case`: Get detailed information about a specific test case
+- `get_test_steps`: Get all test steps for a specific test case
+- `get_server_info`: Get the server version, build time and start time
+- `list_test_case_attachments`: List the attachments of a test case and, optionally, of its steps
+- `get_test_case_attachment`: Download a test case or test step attachment
 
 ### Setup Instructions
 

@@ -1,4 +1,5 @@
 import { ZephyrClient } from '../clients/zephyr-client.js';
+import { htmlToText } from '../utils/text.js';
 import {
   createTestCycleSchema,
   listTestCyclesSchema,
@@ -17,33 +18,23 @@ const getZephyrClient = (): ZephyrClient => {
 
 export const createTestCycle = async (input: CreateTestCycleInput) => {
   const validatedInput = createTestCycleSchema.parse(input);
-  
+
   try {
     const testCycle = await getZephyrClient().createTestCycle({
       name: validatedInput.name,
       description: validatedInput.description,
       projectKey: validatedInput.projectKey,
       versionId: validatedInput.versionId,
-      environment: validatedInput.environment,
       startDate: validatedInput.startDate,
       endDate: validatedInput.endDate,
     });
-    
+
     return {
       success: true,
       data: {
         id: testCycle.id,
         key: testCycle.key,
-        name: testCycle.name,
-        description: testCycle.description,
-        projectId: testCycle.projectId,
-        versionId: testCycle.versionId,
-        environment: testCycle.environment,
-        status: testCycle.status,
-        plannedStartDate: testCycle.plannedStartDate,
-        plannedEndDate: testCycle.plannedEndDate,
-        createdOn: testCycle.createdOn,
-        executionSummary: testCycle.executionSummary,
+        name: validatedInput.name,
       },
     };
   } catch (error: any) {
@@ -56,85 +47,34 @@ export const createTestCycle = async (input: CreateTestCycleInput) => {
 
 export const listTestCycles = async (input: ListTestCyclesInput) => {
   const validatedInput = listTestCyclesSchema.parse(input);
-  
+
   try {
-    const result = await getZephyrClient().getTestCycles(
+    const client = getZephyrClient();
+    const result = await client.getTestCycles(
       validatedInput.projectKey,
       validatedInput.versionId,
-      validatedInput.limit
+      validatedInput.limit,
+      validatedInput.offset
     );
-    
+
     return {
       success: true,
       data: {
         total: result.total,
-        testCycles: result.testCycles.map(cycle => ({
+        offset: validatedInput.offset,
+        returned: result.values.length,
+        testCycles: await Promise.all(result.values.map(async cycle => ({
           id: cycle.id,
           key: cycle.key,
           name: cycle.name,
-          description: cycle.description,
-          projectId: cycle.projectId,
-          versionId: cycle.versionId,
-          environment: cycle.environment,
-          status: cycle.status,
-          plannedStartDate: cycle.plannedStartDate,
-          plannedEndDate: cycle.plannedEndDate,
-          actualStartDate: cycle.actualStartDate,
-          actualEndDate: cycle.actualEndDate,
-          createdOn: cycle.createdOn,
-          updatedOn: cycle.updatedOn,
-          executionSummary: {
-            total: cycle.executionSummary.total,
-            passed: cycle.executionSummary.passed,
-            failed: cycle.executionSummary.failed,
-            blocked: cycle.executionSummary.blocked,
-            inProgress: cycle.executionSummary.inProgress,
-            notExecuted: cycle.executionSummary.notExecuted,
-            passRate: cycle.executionSummary.total > 0 
-              ? Math.round((cycle.executionSummary.passed / cycle.executionSummary.total) * 100)
-              : 0,
-          },
-        })),
-      },
-    };
-  } catch (error: any) {
-    return {
-      success: false,
-      error: error.response?.data?.message || error.message,
-    };
-  }
-};
-
-export const getTestCycle = async (input: { cycleId: string }) => {
-  try {
-    const result = await getZephyrClient().getTestCycles('', undefined, 1000);
-    const testCycle = result.testCycles.find(cycle => cycle.id === input.cycleId);
-    
-    if (!testCycle) {
-      return {
-        success: false,
-        error: 'Test cycle not found',
-      };
-    }
-    
-    return {
-      success: true,
-      data: {
-        id: testCycle.id,
-        key: testCycle.key,
-        name: testCycle.name,
-        description: testCycle.description,
-        projectId: testCycle.projectId,
-        versionId: testCycle.versionId,
-        environment: testCycle.environment,
-        status: testCycle.status,
-        plannedStartDate: testCycle.plannedStartDate,
-        plannedEndDate: testCycle.plannedEndDate,
-        actualStartDate: testCycle.actualStartDate,
-        actualEndDate: testCycle.actualEndDate,
-        createdOn: testCycle.createdOn,
-        updatedOn: testCycle.updatedOn,
-        executionSummary: testCycle.executionSummary,
+          description: htmlToText(cycle.description),
+          status: await client.resolveName('statuses', cycle.status),
+          folder: await client.resolveName('folders', cycle.folder),
+          jiraProjectVersionId: cycle.jiraProjectVersion?.id ?? null,
+          plannedStartDate: cycle.plannedStartDate ?? null,
+          plannedEndDate: cycle.plannedEndDate ?? null,
+          ownerAccountId: cycle.owner?.accountId ?? null,
+        }))),
       },
     };
   } catch (error: any) {

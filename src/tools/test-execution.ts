@@ -1,4 +1,6 @@
 import { ZephyrClient } from '../clients/zephyr-client.js';
+import { JiraClient } from '../clients/jira-client.js';
+import { htmlToText } from '../utils/text.js';
 import {
   executeTestSchema,
   getTestExecutionStatusSchema,
@@ -9,6 +11,7 @@ import {
   LinkTestsToIssuesInput,
   GenerateTestReportInput,
 } from '../utils/validation.js';
+import { ZephyrTestReport } from '../types/zephyr-types.js';
 
 let zephyrClient: ZephyrClient | null = null;
 
@@ -19,32 +22,67 @@ const getZephyrClient = (): ZephyrClient => {
   return zephyrClient;
 };
 
+let jiraClient: JiraClient | null = null;
+
+const getJiraClient = (): JiraClient => {
+  if (!jiraClient) {
+    jiraClient = new JiraClient();
+  }
+  return jiraClient;
+};
+
+const EXECUTION_STATUS_NAMES: Record<ExecuteTestInput['status'], string> = {
+  PASS: 'Pass',
+  FAIL: 'Fail',
+  WIP: 'In Progress',
+  BLOCKED: 'Blocked',
+  NOT_EXECUTED: 'Not Executed',
+};
+
+// Zephyr links take the numeric Jira issue id, not the key
+const getIssueId = async (issueKey: string): Promise<number> => {
+  const issue = await getJiraClient().getIssue(issueKey, ['summary']);
+  return Number(issue.id);
+};
+
 export const executeTest = async (input: ExecuteTestInput) => {
   const validatedInput = executeTestSchema.parse(input);
-  
+
   try {
-    const execution = await getZephyrClient().updateTestExecution({
+    const client = getZephyrClient();
+    await client.updateTestExecution({
       executionId: validatedInput.executionId,
-      status: validatedInput.status,
+      statusName: validatedInput.statusName ?? EXECUTION_STATUS_NAMES[validatedInput.status],
       comment: validatedInput.comment,
-      defects: validatedInput.defects,
     });
-    
+
+    const defectResults = [];
+    for (const issueKey of validatedInput.defects ?? []) {
+      try {
+        await client.linkTestExecutionToIssue(validatedInput.executionId, await getIssueId(issueKey));
+        defectResults.push({ issueKey, success: true });
+      } catch (error: any) {
+        defectResults.push({
+          issueKey,
+          success: false,
+          error: error.response?.data?.message || error.response?.data?.errorMessages?.[0] || error.message,
+        });
+      }
+    }
+
+    const execution = await client.getTestExecution(validatedInput.executionId);
+
     return {
       success: true,
       data: {
         id: execution.id,
         key: execution.key,
-        cycleId: execution.cycleId,
-        testCaseId: execution.testCaseId,
-        status: execution.status,
-        comment: execution.comment,
-        executedOn: execution.executedOn,
-        executedBy: execution.executedBy?.displayName,
-        defects: execution.defects.map(defect => ({
-          key: defect.key,
-          summary: defect.summary,
-        })),
+        status: await client.resolveName('statuses', execution.testExecutionStatus),
+        comment: htmlToText(execution.comment),
+        actualEndDate: execution.actualEndDate ?? null,
+        executedById: execution.executedById ?? null,
+        linkedIssueIds: execution.links?.issues?.map(issue => issue.issueId) ?? [],
+        defectLinkResults: defectResults,
       },
     };
   } catch (error: any) {
@@ -73,6 +111,7 @@ export const getTestExecutionStatus = async (input: GetTestExecutionStatusInput)
           inProgress: summary.inProgress,
           notExecuted: summary.notExecuted,
           passRate: Math.round(summary.passRate),
+          byStatus: summary.byStatus,
         },
         progress: {
           completed: summary.passed + summary.failed + summary.blocked,
@@ -99,7 +138,7 @@ export const linkTestsToIssues = async (input: LinkTestsToIssuesInput) => {
     
     for (const issueKey of validatedInput.issueKeys) {
       try {
-        await getZephyrClient().linkTestCaseToIssue(validatedInput.testCaseId, issueKey);
+        await getZephyrClient().linkTestCaseToIssue(validatedInput.testCaseId, await getIssueId(issueKey));
         results.push({
           issueKey,
           success: true,
@@ -108,7 +147,7 @@ export const linkTestsToIssues = async (input: LinkTestsToIssuesInput) => {
         results.push({
           issueKey,
           success: false,
-          error: error.response?.data?.message || error.message,
+          error: error.response?.data?.message || error.response?.data?.errorMessages?.[0] || error.message,
         });
       }
     }
@@ -164,12 +203,22 @@ export const generateTestReport = async (input: GenerateTestReportInput) => {
   }
 };
 
-const generateHtmlReport = (report: any) => {
+const escapeHtml = (text: string): string =>
+  text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+
+const STATUS_CLASSES: Record<string, string> = {
+  pass: 'pass',
+  fail: 'fail',
+  blocked: 'blocked',
+  'in progress': 'progress',
+};
+
+const generateHtmlReport = (report: ZephyrTestReport) => {
   return `
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Test Execution Report - ${report.cycleName}</title>
+      <title>Test Execution Report - ${escapeHtml(report.cycleName)}</title>
       <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .header { background-color: #f5f5f5; padding: 20px; border-radius: 5px; }
@@ -188,7 +237,7 @@ const generateHtmlReport = (report: any) => {
     <body>
       <div class="header">
         <h1>Test Execution Report</h1>
-        <h2>${report.cycleName}</h2>
+        <h2>${escapeHtml(report.cycleKey)} - ${escapeHtml(report.cycleName)}</h2>
         <p>Project: ${report.projectKey}</p>
         <p>Generated: ${new Date(report.generatedOn).toLocaleString()}</p>
       </div>
@@ -218,11 +267,11 @@ const generateHtmlReport = (report: any) => {
       
       <div class="executions">
         <h3>Test Executions</h3>
-        ${report.executions.map((exec: any) => `
-          <div class="execution ${exec.status.toLowerCase()}">
-            <strong>${exec.key}</strong> - ${exec.status}
-            ${exec.comment ? `<p>${exec.comment}</p>` : ''}
-            ${exec.defects.length > 0 ? `<p>Defects: ${exec.defects.map((d: any) => d.key).join(', ')}</p>` : ''}
+        ${report.executions.map(exec => `
+          <div class="execution ${STATUS_CLASSES[exec.status.toLowerCase()] ?? ''}">
+            <strong>${escapeHtml(exec.key)}</strong>${exec.testCaseKey ? ` (${escapeHtml(exec.testCaseKey)})` : ''} - ${escapeHtml(exec.status)}
+            ${exec.comment ? `<p>${escapeHtml(exec.comment)}</p>` : ''}
+            ${exec.issueIds.length > 0 ? `<p>Linked issues: ${exec.issueIds.join(', ')}</p>` : ''}
           </div>
         `).join('')}
       </div>
